@@ -1,0 +1,15 @@
+color	rgb
+calibration	radiance
+area_def	eurol
+dataset	natural_enh
+reader	seviri_l1b_native
+label	real
+dtype	float32
+radius	16000
+epsilon	.5
+nodata	-3.4E+38
+out_type	cv2
+brightness	0
+contrast	-5
+starttime	12/2/2024 9:00
+endtime	12/2/2024 16:15
