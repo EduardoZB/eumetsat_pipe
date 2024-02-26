@@ -10,6 +10,8 @@ import cv2
 import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
+import cartopy
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 
 ### Select a specific area to display with pyresample
 
@@ -24,25 +26,24 @@ llx = -10 # lower left x coordinate in degrees
 lly = 35 # lower left y coordinate in degrees
 urx = 4 # upper right x coordinate in degrees
 ury = 45 # upper right y coordinate in degrees
-resolution = 0.005 # target resolution in degrees
+resolution = 0.003 # target resolution in degrees
 # calculating the number of pixels
 width = int((urx - llx) / resolution)
 height = int((ury - lly) / resolution)
 area_extent = (llx,lly,urx,ury)
 # defining the area
-area_def = pr.geometry.AreaDefinition(area_id, proj_id, description, proj_dict,
-                                      width, height, area_extent)
-
+area_def = pr.geometry.AreaDefinition(area_id, proj_id, description,
+                                      proj_dict, width, height, area_extent)
 
 ### Define the function that converts the .nat file to .tif, .png or .jpg files containing the selected dataset image
 
-def nat2tif(file, calibration, area_def, dataset, reader, label, dtype, radius,
-            epsilon, nodata, out_type, bright, contrast, strtime, endtime):
+def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
+            radius, epsilon, nodata, out_type, bright, contrast, strtime,
+            endtime):
     # open the file
     scn = Scene(filenames = {reader: [file]})
     filetime = scn.end_time
     if filetime<strtime or filetime>endtime:
-        print('NOT in the specified time range')
         return
     scn.load([dataset])
     # let us extract the longitude and latitude data
@@ -56,23 +57,35 @@ def nat2tif(file, calibration, area_def, dataset, reader, label, dtype, radius,
     lons = lons.astype(dtype)
     lats = lats.astype(dtype)
     values = values.astype(dtype)
+
+    # Handling array shape for composite images
+    if color.lower() == 'mono':
+        nbands = 1
+    elif color.lower() == 'rgb':
+        nbands = 3
+        values = values.transpose(1,2,0)
+    else:
+        print('Not a valid color scheme')
+
     # now we can already resample our data to the area of interest
     values = pr.kd_tree.resample_nearest(swath_def, values,
                                          area_def,
-                                         radius_of_influence=radius, # in meters
+                                         radius_of_influence=radius, # meters
                                          epsilon=epsilon,
                                          fill_value=False)
-    
-    # let us join our filename based on the input file's basename and its end time    
-
+    # let us join our filename based on the input file's basename and its end time
     nowutc = filetime.strftime('%H%M')
     nowday = filetime.strftime('%d%m')
-    outnamev = os.path.basename(file)[:4]+'_'+nowutc+'_'+str(label)    
+    outnamev = os.path.basename(file)[:4] +'_'+ nowutc +'_'+ area_def.area_id + str(label)  
     outdir = './output'+nowday
     # we are going to check if the outdir exists and create it if it doesnt
     if not os.path.exists(outdir):
         os.makedirs(outdir)
-    
+    # Handling a bug where pyresample with natural_enh sums the values of all channels to the red channel twice
+    if dataset.lower() == 'natural_enh':
+        redch = np.zeros(values.shape)
+        redch = (values[:,:,0] - values[:,:,1]*2 - values[:,:,2]*2)/2
+        values[:,:,0] = redch
     # now we define some metadata for our raster file
     cols = values.shape[1]
     rows = values.shape[0]
@@ -88,78 +101,105 @@ def nat2tif(file, calibration, area_def, dataset, reader, label, dtype, radius,
         
         # here we actually create the file
         driver = gdal.GetDriverByName('GTiff')
-        outRaster = driver.Create(outname, cols, rows, 1)
-        
-        # writing the metadata
-        outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0, pixelHeight))
-        
-        # creating a new band and writting the data
-        outband = outRaster.GetRasterBand(1)
-        outband.SetNoDataValue(nodata) #specified no data value by user
-        outband.WriteArray(np.array(values)) # writting the values
-        outRasterSRS = osr.SpatialReference() # create CRS instance
-        outRasterSRS.ImportFromEPSG(4326) # get info for EPSG 4326
-        outRaster.SetProjection(outRasterSRS.ExportToWkt()) # set CRS as WKT
-    
-        # clean up
-        outband.FlushCache()
-        outband = None
-        outRaster = None
-    
+
+        if color.lower() == 'mono':
+            
+            outRaster = driver.Create(outname, cols, rows, 1)
+            # writing the metadata
+            outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0,
+                                       pixelHeight))
+            # creating a new band and writting the data
+            outband = outRaster.GetRasterBand(1)
+            outband.SetNoDataValue(nodata) #specified no data value by user
+            outband.WriteArray(values) # writting the values
+            outRasterSRS = osr.SpatialReference() # create CRS instance
+            outRasterSRS.ImportFromEPSG(4326) # get info for EPSG 4326
+            outRaster.SetProjection(outRasterSRS.ExportToWkt()) # set CRS as WKT
+            # clean up
+            outband.FlushCache()
+            outband = None
+            outRaster = None
+        elif color.lower() == 'rgb':
+            outRaster = driver.Create(outname, cols, rows, 3)
+            # writing the metadata
+            outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0,
+                                           pixelHeight))
+            # creating a new band and writting the data
+            outRaster.GetRasterBand(1).WriteArray(values[:,:,0])
+            outRaster.GetRasterBand(2).WriteArray(values[:,:,1])
+            outRaster.GetRasterBand(3).WriteArray(values[:,:,2])
+            #outband.SetNoDataValue(nodata) #specified no data value by user
+            outRasterSRS = osr.SpatialReference() # create CRS instance
+            outRasterSRS.ImportFromEPSG(4326) # get info for EPSG 4326
+            outRaster.SetProjection(outRasterSRS.ExportToWkt()) # set CRS as WKT
+            # clean up
+            outRaster.FlushCache()
+            outRaster = None
+
     # this output saves the image through cv2 library
     elif out_type.lower() == 'cv2':
         # add file extension to name
-        outname = os.path.join(outdir, outnamev + '.png')        
-        
-        # preparing the data
-        data = np.array(values)
-
-        cv2out = cv2.convertScaleAbs(data, beta=bright, alpha=contrast)
-        
-        # save the output
-        cv2.imwrite(outname, cv2out)
-        
+        outname = os.path.join(outdir, outnamev + '.png')
+        # scaling for mpl
+        values = np.interp(values, (np.percentile(values,1), np.percentile(
+                           values,99)), (0, 255))
+        if color.lower() == 'rgb':
+            # OpenCV inverts the channel order for some reason
+            cv2out = np.zeros(values.shape)
+            cv2out[:,:,0] = values[:,:,2]
+            cv2out[:,:,1] = values[:,:,1]
+            cv2out[:,:,2] = values[:,:,0]
+            # normalize and manually correct constrast
+            cv2out = cv2.convertScaleAbs(cv2out, beta=bright, alpha=contrast)
+            # save the output
+            cv2.imwrite(outname, cv2out)
+            cv2out = None
+        if color.lower() == 'mono':
+            # normalize and manually correct constrast
+            cv2out = cv2.convertScaleAbs(values, beta=bright, alpha=contrast)
+            # save the output
+            cv2.imwrite(outname, cv2out)
+            cv2out = None        
     # this output plots an image with matplotlib
     elif out_type.lower() == 'plt':
         # add file extension to name
-        outname = os.path.join(outdir, outnamev + 'mpl.png')
-        
-        # preparing the data
-        data = np.array(values)
-                
+        outname = os.path.join(outdir, outnamev + 'mpl.png') 
+        # scaling for mpl
+        values = np.interp(values, (np.percentile(values,1), np.percentile(
+                           values,99)), (0, 1))
+        # defining coordinate reference system
+        crs = area_def.to_cartopy_crs()
+        # Initiatie a subplot and axes with the CRS information defined above
+        fig, ax = plt.subplots(subplot_kw=dict(projection=crs),
+                               figsize=(10, 8))
+        # Add coastline features to the plot
+        ax.coastlines()
+        # Define a grid to be added to the plot
+        gl = ax.gridlines(draw_labels=True, linestyle='--',
+                          xlocs=range(int(originX),
+                          int(area_def.area_extent[2]),5),
+                          ylocs=range(int(area_def.area_extent[1]),
+                          int(originY),5))
+        gl.top_labels=False
+        gl.right_labels=False
+        gl.xformatter=LONGITUDE_FORMATTER
+        gl.yformatter=LATITUDE_FORMATTER
+        gl.xlabel_style={'size':14}
+        gl.ylabel_style={'size':14}
+
+        ax.set_global()
+        # In the end, we can plot our image data...
+        img = ax.imshow(values, transform=crs, extent=crs.bounds, origin="upper")
+        # Define a title for the plot
+        plt.title(dataset + " image of " + area_def.area_id + 
+                  ", recorded by MSG at " + nowutc + ' hours of ' +
+                  filetime.strftime('%d/%m/%Y'), fontsize=12, pad=20.0)
         # save output
-        plt.imshow(data)
-        plt.gca().set(title=label, xlabel='Longitude', ylabel='Latitude')
-        plt.xticks([0, cols], [area_def.area_extent[0], area_def.area_extent[2]])
-        plt.yticks([0, rows], [area_def.area_extent[3], area_def.area_extent[1]])
-        plt.savefig(outname)
+        fig.savefig(outname)
         
     else:
-        print('Not a valid output type')
-
-### Define the funciton that converts .nat file in full color png. Resampling has to be managed by satpy
-
-def nat2rgb(file, area, dataset, reader, label, strtime, endtime):
-
-    # read the file
-    scn = Scene(filenames = {reader:[file]})
-    # get file time
-    filetime = scn.end_time
-    if filetime<strtime or filetime>endtime:
-        print('NOT in the specified time range')
-        return
-    nowutc = filetime.strftime('%H%M')
-    nowday = filetime.strftime('%d%m')
-    outdir = './output'+nowday
-    if not os.path.exists(outdir):
-        os.makedirs(outdir)
-    outnamev = os.path.basename(file)[:4]+'_'+nowutc+'_'+str(label)+'_'+area
-    outname = os.path.join(outdir, outnamev +'.png')
-    scn.load([dataset])
-    # resample to europe
-    local_scn = scn.resample(area)
-    # save the resampled dataset/composite to disk
-    local_scn.save_dataset(dataset, filename=outname)
+        print('Not a valid output type. Select TIF, CV2 or MPL')
+    values = None
 
 # Access the recipe and transform the data as requested
 
@@ -181,34 +221,23 @@ entries = os.listdir()
 for entry in entries:
     if entry.endswith('.nat'):
         ntr = str(entry)
-        print(ntr)
-        if df[1]['color'].lower() == 'mono':
-            # Here we call the nat2tif funciton for a High-Res monochromatic picture
-            if df[1]['area_def'].lower() == 'area_def':
-                warea = area_def
-            else:
-                warea = pr.load_area('~/anaconda3/envs/py38/lib/python3.8/site-packages/satpy/etc/areas.yaml', df[1]['area_def'])
-            nat2tif(file = ntr, 
-                    calibration = df[1]['calibration'],
-                    area_def = warea,  
-                    dataset = df[1]['dataset'], 
-                    reader = df[1]['reader'], 
-                    label = df[1]['label'], 
-                    dtype = df[1]['dtype'], 
-                    radius = int(df[1]['radius']), 
-                    epsilon = float(df[1]['epsilon']), 
-                    nodata = float(df[1]['nodata']),
-                    out_type = df[1]['out_type'],
-                    bright = int(df[1]['brightness']),
-                    contrast = int(df[1]['contrast']),
-                    strtime = strt,
-                    endtime = endt)
-        elif df[1]['color'].lower() == 'rgb':
-            # Here we call the nat2rgb funciton for a composite picture
-            nat2rgb(file = ntr,
-                    area = df[1]['area_def'],
-                    dataset = df[1]['dataset'],
-                    reader = df[1]['reader'], 
-                    label = df[1]['label'],
-                    strtime = strt,
-                    endtime = endt)
+        if df[1]['area_def'].lower() == 'area_def':
+            warea = area_def
+        else:
+            warea = pr.load_area('/home/z/anaconda3/envs/py38/lib/python3.8/site-packages/satpy/etc/areas.yaml', df[1]['area_def'])
+        nat2tif(file = ntr, 
+                color = df[1]['color'],
+                calibration = df[1]['calibration'],
+                area_def = warea,  
+                dataset = df[1]['dataset'], 
+                reader = df[1]['reader'], 
+                label = df[1]['label'], 
+                dtype = df[1]['dtype'], 
+                radius = int(df[1]['radius']), 
+                epsilon = float(df[1]['epsilon']), 
+                nodata = float(df[1]['nodata']),
+                out_type = df[1]['out_type'],
+                bright = int(df[1]['brightness']),
+                contrast = int(df[1]['contrast']),
+                strtime = strt,
+                endtime = endt)
