@@ -57,7 +57,6 @@ def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
     lons = lons.astype(dtype)
     lats = lats.astype(dtype)
     values = values.astype(dtype)
-    print(values.shape)
 
     # Handling array shape for composite images
     if color.lower() == 'mono':
@@ -82,17 +81,11 @@ def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
     # we are going to check if the outdir exists and create it if it doesnt
     if not os.path.exists(outdir):
         os.makedirs(outdir)
-    # Handling a bug where pyresample with natural_enh sums the values of all channels to the red channel
+    # Handling a bug where pyresample with natural_enh sums the values of all channels to the red channel twice
     if dataset.lower() == 'natural_enh':
         redch = np.zeros(values.shape)
-        redch = (values[:,:,0] - values[:,:,1]*3 - values[:,:,2]*2)
-        # D E B U G I N
-        
-        print(np.min(redch))
-        print(np.min(values[:,:,1]))
-        print(np.min(values[:,:,2]))
-    else:
-        redch = values[:,:,0]
+        redch = (values[:,:,0] - values[:,:,1]*2 - values[:,:,2]*2)/2
+        values[:,:,0] = redch
     # now we define some metadata for our raster file
     cols = values.shape[1]
     rows = values.shape[0]
@@ -132,7 +125,7 @@ def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
             outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0,
                                            pixelHeight))
             # creating a new band and writting the data
-            outRaster.GetRasterBand(1).WriteArray(redch)
+            outRaster.GetRasterBand(1).WriteArray(values[:,:,0])
             outRaster.GetRasterBand(2).WriteArray(values[:,:,1])
             outRaster.GetRasterBand(3).WriteArray(values[:,:,2])
             #outband.SetNoDataValue(nodata) #specified no data value by user
@@ -149,23 +142,24 @@ def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
         outname = os.path.join(outdir, outnamev + '.png')
         # scaling for mpl
         values = np.interp(values, (np.percentile(values,1), np.percentile(
-                           values,99)), (0, 254))
+                           values,99)), (0, 255))
         if color.lower() == 'rgb':
             # OpenCV inverts the channel order for some reason
             cv2out = np.zeros(values.shape)
             cv2out[:,:,0] = values[:,:,2]
             cv2out[:,:,1] = values[:,:,1]
-            cv2out[:,:,2] = redch
+            cv2out[:,:,2] = values[:,:,0]
             # normalize and manually correct constrast
             cv2out = cv2.convertScaleAbs(cv2out, beta=bright, alpha=contrast)
             # save the output
             cv2.imwrite(outname, cv2out)
+            cv2out = None
         if color.lower() == 'mono':
             # normalize and manually correct constrast
             cv2out = cv2.convertScaleAbs(values, beta=bright, alpha=contrast)
             # save the output
             cv2.imwrite(outname, cv2out)
-        cv2out = None
+            cv2out = None        
     # this output plots an image with matplotlib
     elif out_type.lower() == 'plt':
         # add file extension to name
@@ -204,7 +198,7 @@ def nat2tif(file, color, calibration, area_def, dataset, reader, label, dtype,
         fig.savefig(outname)
         
     else:
-        print('Not a valid output type')
+        print('Not a valid output type. Select TIF, CV2 or MPL')
     values = None
 
 # Access the recipe and transform the data as requested
