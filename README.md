@@ -31,7 +31,7 @@ Here are some example files using different output types.
 Made with MatPlotLib
 
 ![cv2](MSG3_1515_HRV.png "Feb9tHRVcv2")
-Made with OpenCv
+Made with OpenCV
 
 ![satpy](MSG3_1230_real_eurol.png "Feb12tHRVsatpy")
 Made with SatPy
