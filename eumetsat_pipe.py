@@ -16,23 +16,23 @@ import yaml
 
 ### Select a specific area to display with pyresample
 
-# create some information on the reference system
+# Create some information on the reference system
 area_id = 'Spain'
 description = 'Geographical Coordinate System clipped on Spain'
 proj_id = 'Spain'
-# specifing some parameters of the projection
+# Specifing some parameters of the projection
 proj_dict = {"proj": "longlat", "ellps": "WGS84", "datum": "WGS84"}
-# calculate the width and height of the aoi in pixels
+# Calculate the width and height of the aoi in pixels
 llx = -10 # lower left x coordinate in degrees
 lly = 35 # lower left y coordinate in degrees
 urx = 4 # upper right x coordinate in degrees
 ury = 45 # upper right y coordinate in degrees
 resolution = 0.005 # target resolution in degrees
-# calculating the number of pixels
+# Calculating the number of pixels
 width = int((urx - llx) / resolution)
 height = int((ury - lly) / resolution)
 area_extent = (llx,lly,urx,ury)
-# defining the area
+# Defining the area
 area_def = pr.geometry.AreaDefinition(area_id, proj_id, description, proj_dict,
                                       width, height, area_extent)
 print(area_def)
@@ -161,7 +161,6 @@ def nat2rgb(file, area, dataset, reader, label):
     local_scn.save_dataset(dataset, filename=outname)
 
 # Access the recipe and transform the data as requested
-
 df=pd.read_table('eumetsat_recipe.txt',header=None,index_col=0)
 
 if df[1]['starttime'].lower() == 'recent':
@@ -200,6 +199,11 @@ products = selected_collection.search(
     dtstart=strt,
     dtend=endt)
 
+# Warn if dataset is empty    
+if len(products) < 1:
+    print('No files found for this time range')
+
+# Get and process .nat files
 for product in products:
     try:
         print(product)
@@ -220,13 +224,13 @@ for product in products:
                 print(f'Download of file {fsrc.name} finished.')
             else:
                 print(f'File {ntr} already in directory.')
-                
-            if df[1]['color'].lower() == 'mono':
-                # Here we call the nat2tif funciton for a High-Res monochromatic picture
-                if df[1]['area_def'].lower() == 'area_def':
-                    warea = area_def
-                else:
-                    warea = pr.load_area('~/anaconda3/envs/py38/lib/python3.8/site-packages/satpy/etc/areas.yaml', df[1]['area_def'])                
+            if df[1]['area_def'].lower() == 'area_def':
+                warea = area_def
+            else:
+                warea = pr.load_area('~/anaconda3/envs/py38/lib/python3.8/site-packages/satpy/etc/areas.yaml', df[1]['area_def'])
+
+            # Here we call the nat2tif funciton for a High-Res monochromatic picture
+            if df[1]['color'].lower() == 'mono':  
                 nat2tif(file = ntr, 
                         calibration = df[1]['calibration'],
                         area_def = warea,  
@@ -240,9 +244,10 @@ for product in products:
                         out_type = df[1]['out_type'],
                         bright = int(df[1]['brightness']),
                         contrast = int(df[1]['contrast']))
+
+            # Here we call the nat2rgb funciton for a composite image
             elif df[1]['color'].lower() == 'rgb':
-                # Here we call the nat2rgb funciton for a composite image
-                nat2rgb(file = ntr,
+                        nat2rgb(file = ntr,
                         area = df[1]['area_def'],
                         dataset = df[1]['dataset'],
                         reader = df[1]['reader'], 
